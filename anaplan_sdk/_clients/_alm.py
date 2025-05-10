@@ -1,11 +1,15 @@
+import logging
+import time
 import warnings
 
 import httpx
 
 from anaplan_sdk._base import _BaseClient
-from anaplan_sdk.models import ModelRevision, Revision, SyncTask, User
+from anaplan_sdk.exceptions import AnaplanActionError
+from anaplan_sdk.models import ModelRevision, Revision, SyncTask, TaskStatus, User
 
 warnings.filterwarnings("always", category=DeprecationWarning)
+logger = logging.getLogger("anaplan_sdk")
 
 
 class _AlmClient(_BaseClient):
@@ -96,3 +100,77 @@ class _AlmClient(_BaseClient):
                 "appliedToModels", []
             )
         ]
+
+    def run_sync(
+        self, source_model_id: str, source_revision_id: str, target_revision_id: str
+    ) -> TaskStatus:
+        """
+        Runs the ALM model sync to update the current model from the source model
+        and source revision.  The target_revision must be the current model's latest revision.
+        When the sync is complete, the current model's latest revision will be
+        the source revision.
+        :param source_model_id: The identifier of the model with the desired revision.
+                                Typically this is either a development model or a test model.
+        :param source_revision: The revision on the source model with the desired changes.
+                                This must be after the target revision, but need not be the
+                                latest revision in the source model.
+        :param target_revision: The latest revision in the current model.
+        :return: The status of the model sync activity
+        """
+        task_id = self.invoke_sync(source_model_id, source_revision_id, target_revision_id)
+        task_status = self.get_task_status(task_id)
+
+        while task_status.task_state != "COMPLETE":
+            time.sleep(self.status_poll_delay)
+            task_status = self.get_task_status(task_id)
+
+        if task_status.task_state == "COMPLETE" and not task_status.result.successful:
+            raise AnaplanActionError(f"Task '{task_id}' completed with errors.")
+
+        logger.info(f"Task '{task_id}' completed successfully.")
+        return task_status
+
+    def get_task_status(self, task_id: str) -> TaskStatus:
+        """
+        Retrieves the status of the specified ALM sync task.
+        :param task_id: The identifier of the spawned ALM sync task.
+        :return: The status of the ALM sync task.
+        """
+        return TaskStatus.model_validate(
+            self._get(f"{self._url}/syncTasks/{task_id}").get("task")
+        )
+
+    def invoke_sync(
+        self, source_model_id: str, source_revision_id: str, target_revision_id: str
+    ) -> str:
+        """
+        You may want to consider using `run_sync()` instead.
+
+        Invokes the specified ALM model sync action and returns the spawned Task identifier.
+        This is useful if you want to handle the Task status yourself or if you want to run
+        multiple model sync actions in parallel.
+        :param source_model_id: The identifier of the model with the desired revision.
+                                Typically this is either a development model or a test model.
+        :param source_revision: The revision on the source model with the desired changes.
+                                This must be after the target revision, but need not be the
+                                latest revision in the source model.
+        :param target_revision: The latest revision in the current model.
+        :return: The identifier of the spawned task.
+        """
+        response = self._post(
+            f"{self._url}/syncTasks",
+            json={
+                "sourceRevisionId": source_revision_id,
+                "sourceModelId": source_model_id,
+                "targetRevisionId": target_revision_id,
+            },
+        )
+        task_id = response.get("task").get("taskId")
+        logger.info(
+            (
+                f"Invoked ALM sync from revision '{target_revision_id}' "
+                f"to model '{source_model_id}' revision '{source_revision_id}', "
+                f"spawned Task: '{task_id}'."
+            )
+        )
+        return task_id

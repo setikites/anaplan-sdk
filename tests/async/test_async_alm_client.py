@@ -26,3 +26,17 @@ async def test_get_syncable_revisions(client: AsyncClient):
 async def test_get_latest_revision(client: AsyncClient):
     revs = await client.alm.get_latest_revision()
     assert isinstance(revs, list)
+    assert len (revs) > 0
+
+
+async def test_run_sync (client: AsyncClient):
+    target_revision = await client.alm.get_latest_revision()
+    models = await client.alm.get_models_for_revision (target_revision.id)
+    source_model = models[0]
+    other = AsyncClient.from_existing (client, source_model.workspace_id, source_model.id)
+    source_revision = await other.alm.get_latest_revision () # or create test revision
+    task_status = await client.alm.run_sync (source_model.id, source_revision.id, target_revision.id)
+    final_revision =  await client.alm.get_latest_revision()
+    assert task_status.task_state == "COMPLETE"
+    assert task_status.result.successful
+    assert final_revision == source_revision
