@@ -19,8 +19,9 @@ def test_get_sync_tasks(client: Client):
 
 
 def test_get_syncable_revisions(client: Client):
-    models = client.alm.get_syncable_revisions("327F80BA66344A1C84C69AE82C006CDE")
-    assert isinstance(models, list)
+    revs = client.alm.get_syncable_revisions("327F80BA66344A1C84C69AE82C006CDE")
+    assert isinstance(revs, list)
+    assert len (revs) > 0
 
 
 def test_get_latest_revision(client: Client):
@@ -33,8 +34,9 @@ def test_run_sync (client: Client):
     target_revision = client.alm.get_latest_revision()
     models = client.alm.get_models_for_revision (target_revision.id)
     source_model = models[0]
-    other = Client.from_existing (client, source_model.workspace_id, source_model.id)
-    source_revision = other.alm.get_latest_revision () # or create test revision
+    syncable_revisions = client.alm.get_syncable_revisions (source_model.id)
+    assert len (syncable_revisions) > 0
+    source_revision = syncable_revisions[-1]
     task_status = client.alm.run_sync (source_model.id, source_revision.id, target_revision.id)
     final_revision =  client.alm.get_latest_revision()
     assert task_status.task_state == "COMPLETE"
